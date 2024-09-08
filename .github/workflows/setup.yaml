@@ -1,0 +1,101 @@
+name: Setup
+
+on:
+  workflow_call: # Makes the workflow reusable
+    inputs:
+      cache-key:
+        required: true
+        type: string
+
+permissions:
+  pull-requests: write
+  contents: write
+
+# Place `env` at workflow level so that GITHUB_TOKEN
+# is inherited by all jobs and steps without having
+# to redefine it within each step or job.
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  setup:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Cache Homebrew
+        uses: actions/cache@v4
+        with:
+          path: $(which brew)  # Cache the path dynamically from Homebrew
+          key: homebrew-${{ inputs.cache-key }}-${{ runner.os }}
+          restore-keys: |
+            homebrew-${{ runner.os }}-
+            homebrew-
+
+      - name: Require Homebrew
+        run: |
+          if ! command -v brew &> /dev/null; then
+            echo "Homebrew not found; installing..."
+            /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+          else
+            echo "Homebrew already installed"
+          fi
+
+      - name: Install swiftenv and use Swift 5.10
+        run: |
+          set -x  # Enable detailed output for debugging
+          if ! command -v swiftenv &> /dev/null; then
+            echo "swiftenv not found; installing..."
+            brew install kylef/formulae/swiftenv
+            echo 'if which swiftenv > /dev/null; then eval "$(swiftenv init -)"; fi' >> ~/.zshrc
+            eval "$(swiftenv init -)"
+          else
+            echo "swiftenv already installed"
+            eval "$(swiftenv init -)"
+          fi
+          # Attempt to install Swift 5.10 if not already installed
+          echo "Installing Swift 5.10..."
+          swiftenv install 5.10 || true # Don't fail if already installed
+          # Set Swift 5.10 as the global version
+          swiftenv global 5.10
+          # Check which Swift version is active
+          swiftenv version
+          # Check if Swift is properly installed and working
+          swift --version
+        shell: /bin/bash -e {0}
+
+      - name: Cache GitHub CLI
+        uses: actions/cache@v4
+        with:
+          path: $(which gh)
+          key: gh-cli-${{ inputs.cache-key }}-${{ runner.os }}
+          restore-keys: |
+            gh-cli-${{ runner.os }}-
+            gh-cli-
+
+      - name: Require GitHub CLI
+        run: |
+          if ! command -v gh &> /dev/null; then
+            echo "GitHub CLI not found; installing..."
+            brew install gh
+          else
+            echo "GitHub CLI already installed"
+          fi
+
+      - name: Cache SwiftFormat
+        uses: actions/cache@v4
+        with:
+          path: $(which swiftformat)
+          key: swiftformat-${{ inputs.cache-key }}-${{ runner.os }}
+
+      - name: Require SwiftFormat
+        run: |
+          if ! command -v swiftformat &> /dev/null; then
+            echo "SwiftFormat not found; installing..."
+            brew install swiftformat
+          else
+            echo "SwiftFormat already installed"
+          fi
