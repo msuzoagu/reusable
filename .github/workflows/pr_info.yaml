@@ -1,0 +1,117 @@
+name: PullRequest
+
+on:
+  workflow_call: 
+    inputs:
+      platform:
+        description: "The runner to use"
+        required: true
+        type: string   # The runner is passed as a string
+    outputs:    
+      PR_NUMBER:
+        description: "The number of the pull request"
+        value: ${{ jobs.info.outputs.PR_NUMBER }}
+      PR_AUTHOR:
+        description: "Author of pull request"
+        value: ${{ jobs.info.outputs.PR_AUTHOR }}
+      REPO_NAME:
+        description: "Name of the Repository"
+        value: ${{ jobs.info.outputs.REPO_NAME }}
+      CODE_OWNER:
+        description: " Owner of Repository" # assumes single owner
+        value: ${{ jobs.info.outputs.CODE_OWNER }}
+      HEAD_BRANCH:
+        description: "Branch containing changes (contains work to be merged)"
+        value: ${{ jobs.info.outputs.HEAD_BRANCH }}
+
+jobs:
+  info:
+    runs-on: ${{ inputs.platform }} # Use the platform input here
+    if: ${{ github.event_name == 'pull_request' }}
+    outputs:
+      PR_NUMBER: ${{ steps.pr.outputs.number }}
+      PR_AUTHOR: ${{ steps.author.outputs.author }}
+      HEAD_BRANCH: ${{ steps.branch.outputs.name }}
+      REPO_NAME: ${{ steps.repo_name.outputs.repo }}
+      CODE_OWNER: ${{ steps.code_owner.outputs.owner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Head Branch Name
+        id: branch
+        run: |
+          HEADREF="${GITHUB_HEAD_REF}"
+          echo "name=$HEADREF" >> "$GITHUB_OUTPUT"
+
+      - name: Pull Request Number
+        id: pr
+        run: |
+          set -euo pipefail
+          number="${{ github.event.pull_request.number }}"
+
+          if [[ -n "$number" ]]; then
+            echo "number=$number" >> "$GITHUB_OUTPUT"
+          else
+            echo "pull request number missing: $number"
+            #exit 1
+          fi
+
+      - name: Pull Request Author
+        id: author
+        run: |
+          author="${{ github.event.pull_request.user.login }}"
+
+          if [[ -n "$author" ]]; then
+            echo "author=$author" >> "$GITHUB_OUTPUT"
+          else
+            echo "pr author is missing: $author"
+            exit 1
+          fi
+
+      - name: Code Owner
+        id: code_owner
+        run: |
+          FIRSTLINE=$(cat .github/CODEOWNERS | head -n 1)
+          echo "this is FIRSTLINE: $FIRSTLINE"
+         
+          if [[ -n "$FIRSTLINE" ]]; then
+
+            # remove `* @`
+            STRIPPED=${FIRSTLINE#* @}
+
+            echo "This is STRIPPED: $STRIPPED"
+
+            echo "owner=$STRIPPED" >> "$GITHUB_OUTPUT"
+          else
+            echo "first line in .github/CODEOWNERS is empty : $FIRSTLINE"
+            exit 1
+          fi
+
+      - name: Repository Name
+        id: repo_name
+        env:
+          GITHUB_REPOSITORY: ${{ github.repo }}
+        run: |
+          echo "repo=${GITHUB_REPOSITORY##*/}" >> "$GITHUB_OUTPUT"
+
+
+  debug_called_workflow:
+    needs: info
+    runs-on: ${{ inputs.platform }} 
+    steps:
+      - name: debug
+        env:
+          PR_NUMBER: ${{ needs.info.outputs.PR_NUMBER }}
+          PR_AUTHOR: ${{ needs.info.outputs.PR_AUTHOR }}
+          REPO_NAME: ${{ needs.info.outputs.REPO_NAME }}
+          CODE_OWNER: ${{ needs.info.outputs.CODE_OWNER }}
+          HEAD_BRANCH: ${{ needs.info.outputs.HEAD_BRANCH }}
+        run: |
+          echo "PR_NUMBER: $PR_NUMBER"
+          echo "PR_AUTHOR: $PR_AUTHOR"
+          echo "REPO_NAME: $REPO_NAME"
+          echo "CODE_OWNER: $CODE_OWNER"
+          echo "HEAD_BRANCH: $HEAD_BRANCH"          

@@ -1,0 +1,211 @@
+name: Release
+
+on:
+  workflow_call: 
+    inputs:
+      platform:
+        description: "The runner to use"
+        required: true
+        type: string   # The runner is passed as a string
+    outputs:    
+      PR_NUMBER:
+        description: "The number of the pull request"
+        value: ${{ jobs.info.outputs.PR_NUMBER }}
+      PR_AUTHOR:
+        description: "Author of pull request"
+        value: ${{ jobs.info.outputs.PR_AUTHOR }}
+      REPO_NAME:
+        description: "Name of the Repository"
+        value: ${{ jobs.info.outputs.REPO_NAME }}
+      CODE_OWNER:
+        description: " Owner of Repository" # assumes single owner
+        value: ${{ jobs.info.outputs.CODE_OWNER }}
+      HEAD_BRANCH:
+        description: "Branch containing changes (contains work to be merged)"
+        value: ${{ jobs.info.outputs.HEAD_BRANCH }}
+      VERSION:
+        description: "Version to  released"
+        value: ${{ jobs.info.outputs.VERSION }}
+      RELEASE_TITLE:
+        description: "Title displayed in release notes and changelog"
+        value: ${{ jobs.info.outputs.RELEASE_TITLE }}
+      NEW_TAG:
+        description: "The most recently merged tag (on the HEAD/SOURCE branch)"
+        value: ${{ jobs.info.outputs.NEW_TAG }}
+      OLD_TAG:
+        description: "The oldest merged tag (on the HEAD/SOURCE branch)"
+        value: ${{ jobs.info.outputs.OLD_TAG }}
+      LAST_RELEASE:
+        description: "Last Release Tag"
+        value: ${{ jobs.info.outputs.LAST_RELEASE }}
+      LAST_RELEASE_PRESENT: 
+        description: " Boolean; if false then its the first release"
+        value: ${{ jobs.info.outputs.LAST_RELEASE_PRESENT }}
+
+jobs:
+  info:
+    runs-on: ${{ inputs.platform }} # Use the platform input here
+    if: ${{ github.event_name == 'pull_request' }}
+    outputs:
+      PR_NUMBER: ${{ steps.pr.outputs.number }}
+      PR_AUTHOR: ${{ steps.author.outputs.author }}
+      REPO_NAME: ${{ steps.repo_name.outputs.repo }}
+      CODE_OWNER: ${{ steps.code_owner.outputs.owner }}
+      HEAD_BRANCH: ${{ steps.branch.outputs.name }}
+      VERSION: ${{ steps.version.outputs.release_version }}
+      RELEASE_TITLE: ${{ steps.release_title.outputs.release_title }}
+      NEW_TAG: ${{ steps.new_tag.outputs.new_tag }}
+      OLD_TAG: ${{ steps.old_tag.outputs.old_tag }}
+      LAST_RELEASE: ${{ steps.last_release.outputs.last_release }}
+      LAST_RELEASE_PRESENT: ${{ steps.last_release.outputs.present }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Retrieve Tags
+        run: |
+          git fetch --tags
+
+      - name: Pull Request Number
+        id: pr
+        run: |
+          set -euo pipefail
+          number="${{ github.event.pull_request.number }}"
+
+          if [[ -n "${number}" ]]; then
+            echo "number=${number}" >> "$GITHUB_OUTPUT"
+          else
+            echo "pull request number missing: ${number}"
+            exit 1
+          fi
+
+      - name: Pull Request Author
+        id: author
+        run: |
+          author="${{ github.event.pull_request.user.login }}"
+
+          if [[ -n "${author}" ]]; then
+            echo "author=${author}" >> "$GITHUB_OUTPUT"
+          else
+            echo "pr author is missing: ${author}"
+            exit 1
+          fi
+
+      - name: Repository Name
+        id: repo_name
+        env:
+          GITHUB_REPOSITORY: ${{ github.repo }}
+        run: |
+          echo "repo=${GITHUB_REPOSITORY##*/}" >> "$GITHUB_OUTPUT"
+
+      - name: Code Owner
+        id: code_owner
+        run: |
+          FIRSTLINE=$(cat .github/CODEOWNERS | head -n 1)
+          echo "this is FIRSTLINE: ${FIRSTLINE}"
+         
+          if [[ -n "${FIRSTLINE}" ]]; then
+
+            # remove `* @`
+            STRIPPED=${FIRSTLINE#* @}
+
+            echo "This is STRIPPED: ${STRIPPED}"
+
+            echo "owner=${STRIPPED}" >> "$GITHUB_OUTPUT"
+          else
+            echo "first line in .github/CODEOWNERS is empty : ${FIRSTLINE}"
+            exit 1
+          fi
+
+      - name: Head Branch Name
+        id: branch
+        run: |
+          HEADREF="${GITHUB_HEAD_REF}"
+          echo "name=${HEADREF}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate Branch Name
+        env:
+          branch: ${{ steps.branch.outputs.name }}
+        run: |
+          set -euo pipefail
+          echo "Debug: Branch name is ${branch}"
+
+          if [[ ! "${branch}" =~ ^(release|hotfix)\/v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid branch: ${branch}"
+            echo "A release can only be performed on branches with format:"
+            echo "release/vmajor.minor.patch or hotfix/vmajor.minor.patch"
+            exit 1
+          fi
+
+      - name: Set Release Version
+        id: version
+        env:
+          branch: ${{ steps.branch.outputs.name }}
+        run: |
+          set -euo pipefail
+
+          release_version=$( echo "${branch}" | sed -E 's/^(release|hotfix)\/(v[0-9]+\.[0-9]+\.[0-9]+)$/\2/')
+
+          if [[ -z "${release_version}" ]]; then
+            echo "Failed to extract release version from branch: $branch"
+            echo "A release can only be performed on branches with format:"
+            echo "release/vmajor.minor.patch or hotfix/vmajor.minor.patch"
+            exit 1
+          fi
+          
+          echo "release_version=${release_version}" >> "$GITHUB_OUTPUT"
+
+      - name: Release Title
+        id: release_title
+        run: |
+          name="${{ steps.repo_name.outputs.repo }}"
+          version="${{ steps.version.outputs.release_version }}"
+
+          if [[ -z "${name}" || -z "${version}" ]]; then
+            echo "Failed to extract repo_name: ${name} or release_version: ${version}"
+            exit 1
+          fi
+          
+          echo "release_title=${name} ${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Most Recent Tag
+        id: new_tag
+        run: |
+          newest_merged_tag=$(git tag --sort=-committerdate --merged | head -n 1)
+
+          if [[ -n "${newest_merged_tag}" ]]; then
+            echo "new_tag=${newest_merged_tag}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Oldest Tag
+        id: old_tag
+        run: |
+          oldest_merged_tag=$(git tag --sort=committerdate --merged | head -n 1)
+
+          if [[ -n "${oldest_merged_tag}" ]]; then
+            echo "old_tag=${oldest_merged_tag}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Last Release
+        id: last_release
+        run: |
+          releases_count=$(gh release list --exclude-drafts --exclude-pre-releases --json tagName | jq 'length')
+
+          echo "Number of Releases: ${releases_count}"
+
+          if [ "$releases_count" -gt 0 ]; then
+            
+            last_release=$(gh release list --json tagName,isLatest --jq '.[] | select(.isLatest == true) | .tagName')
+            
+            if [ -n "$last_release" ]; then
+              echo "last_release=${last_release}" >> "$GITHUB_OUTPUT"
+              echo "present=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "present=false" >> "$GITHUB_OUTPUT"
+            fi
+
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
