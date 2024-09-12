@@ -1,0 +1,112 @@
+name: MilestoneManager
+
+on:
+  workflow_call:
+    inputs:
+      platform:
+        description: "The runner to use"
+        required: true
+        type: string
+
+jobs:
+  create:
+    runs-on: ${{ inputs.platform }}
+    if: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - name: Extract Milestone Name From Base Branch
+        id: milestone_name
+        run: |
+          BASE_BRANCH_NAME="${{ github.event.pull_request.base.ref }}"
+          if [[ "${BASE_BRANCH_NAME}" =~ ^(.*)-milestone$ ]]; then
+            MILESTONE_NAME="${BASH_REMATCH[1]}"
+            echo "milestone_name=${MILESTONE_NAME}" >> $GITHUB_ENV
+          else
+            echo "Branch name does not match the pattern"
+            exit 1
+          fi
+
+      - name: Create Or Apply Milestone to PR
+        id: milestones
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const milestoneName = process.env.milestone_name;
+
+            const list = await github.rest.issues.listMilestones({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+            });
+
+            console.log("Milestones: ", list.data.map(m => m.title));
+
+            const milestoneFound = list.data.find(m => m.title === milestoneName);
+
+            //Create a new milestone if not found
+            let prMilestone;
+            if (!milestoneFound) {
+              const response = await github.rest.issues.createMilestone({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: milestoneName,
+                description: `${milestoneName}`
+              });
+
+              prMilestone = response.data;
+              console.log(`Created Milestone: ${milestoneName}`);
+            } else {
+              prMilestone = milestoneFound;
+            }
+
+            // Attach milestone to PR via its ID (number)
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              milestone: prMilestone.number,
+            });
+            console.log(`Attached Milestone: ${milestoneName} to PR`)
+
+      - name: Extract feature name from base branch
+        id: feature_name
+        run: |
+          HEAD_BRANCH_NAME="${{ github.event.pull_request.head.ref }}"
+          if [[ "${HEAD_BRANCH_NAME}" =~ ^.*-milestone-(.*)$ ]]; then
+            FEATURE_NAME="${BASH_REMATCH[1]}"
+            echo "feature_name=${FEATURE_NAME}" >> $GITHUB_ENV
+          else
+            echo "Branch name does not match the pattern"
+            exit 1
+          fi
+
+      - name: Create or apply feature label
+        id: repo_labels
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const featureLabel = process.env.feature_name;
+
+            const { data: labels } = await github.rest.issues.listLabelsForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+            });
+
+            const labelExists = labels.some(label => label.name === featureLabel);
+
+            if (!labelExists) {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: featureLabel,
+                color: '0e8a16',
+              });
+              console.log(`Created label: ${featureLabel}`);
+            }
+
+            // add feature label to the PR
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: [featureLabel]
+            });
+            console.log(`Attached label: ${featureLabel} to PR`);
