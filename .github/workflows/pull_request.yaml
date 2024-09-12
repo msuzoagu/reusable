@@ -1,0 +1,181 @@
+name: PullRequest
+
+on:
+  workflow_call: 
+    inputs:
+      platform:
+        description: "The runner to use"
+        required: true
+        type: string   # The runner is passed as a string
+    outputs:    
+      PR_NUMBER:
+        description: "The number of the pull request"
+        value: ${{ jobs.build.outputs.PR_NUMBER }}
+      PR_AUTHOR:
+        description: "Author of pull request"
+        value: ${{ jobs.build.outputs.PR_AUTHOR }}
+      REPO_NAME:
+        description: "Name of the Repository"
+        value: ${{ jobs.build.outputs.REPO_NAME }}
+      CODE_OWNER:
+        description: " Owner of Repository" # assumes single owner
+        value: ${{ jobs.build.outputs.CODE_OWNER }}
+      HEAD_BRANCH:
+        description: "Branch containing changes (contains work to be merged)"
+        value: ${{ jobs.build.outputs.HEAD_BRANCH }}
+
+jobs:
+  build:
+    runs-on: ${{ inputs.platform }} # Use the platform input here
+    if: ${{ github.event_name == 'pull_request' }}
+    outputs:
+      PR_NUMBER: ${{ steps.pr.outputs.number }}
+      PR_AUTHOR: ${{ steps.author.outputs.author }}
+      HEAD_BRANCH: ${{ steps.branch.outputs.name }}
+      REPO_NAME: ${{ steps.repo_name.outputs.repo }}
+      CODE_OWNER: ${{ steps.code_owner.outputs.owner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Head Branch Name
+        id: branch
+        run: |
+          HEADREF="${GITHUB_HEAD_REF}"
+          echo "name=$HEADREF" >> "$GITHUB_OUTPUT"
+
+      - name: Repository Name
+        id: repo_name
+        env:
+          GITHUB_REPOSITORY: ${{ github.repo }}
+        run: |
+          echo "repo=${GITHUB_REPOSITORY##*/}" >> "$GITHUB_OUTPUT"
+
+      - name: Pull Request Number
+        id: pr
+        run: |
+          set -euo pipefail
+          number="${{ github.event.pull_request.number }}"
+
+          if [[ -n "$number" ]]; then
+            echo "number=$number" >> "$GITHUB_OUTPUT"
+          else
+            echo "pull request number missing: $number"
+            #exit 1
+          fi
+
+      - name: Pull Request Author
+        id: author
+        run: |
+          author="${{ github.event.pull_request.user.login }}"
+
+          if [[ -n "$author" ]]; then
+            echo "author=$author" >> "$GITHUB_OUTPUT"
+          else
+            echo "pr author is missing: $author"
+            exit 1
+          fi
+
+      - name: Code Owner
+        id: code_owner
+        run: |
+          FIRSTLINE=$(cat .github/CODEOWNERS | head -n 1)
+          echo "this is FIRSTLINE: $FIRSTLINE"
+         
+          if [[ -n "$FIRSTLINE" ]]; then
+
+            # remove `* @`
+            STRIPPED=${FIRSTLINE#* @}
+
+            echo "This is STRIPPED: $STRIPPED"
+
+            echo "owner=$STRIPPED" >> "$GITHUB_OUTPUT"
+          else
+            echo "first line in .github/CODEOWNERS is empty : $FIRSTLINE"
+            exit 1
+          fi
+
+  assign:
+    needs: build
+    runs-on: ${{ inputs.platform }}
+    if: ${{ github.event.pull_request.state == 'open' || github.event.action == 'reopened' }}    
+    env:
+      PR_NUMBER: ${{ needs.build.outputs.PR_NUMBER }}
+      PR_AUTHOR: ${{ needs.build.outputs.PR_AUTHOR }}
+      REPO_NAME: ${{ needs.build.outputs.REPO_NAME }}
+      CODE_OWNER: ${{ needs.build.outputs.CODE_OWNER }}
+      HEAD_BRANCH: ${{ needs.build.outputs.HEAD_BRANCH }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for Reviewer
+        id: check_reviewer
+        run: |
+          echo "Checking if a reviewer is already assigned to PR: $PR_NUMBER"
+
+          if [[ -n "${PR_NUMBER}" ]]; then
+            CURRENT_REVIEWERS=$(gh pr view "$PR_NUMBER" --json reviewRequests --jq '.reviewRequests | length')
+            echo "current_reviewers=$CURRENT_REVIEWERS" >> $GITHUB_ENV
+          else
+            echo "Missing required input: PR number"
+            exit 1
+          fi
+
+      - name: Assign Reviewer
+        if: ${{ env.current_reviewers == '0' }} # if no reviewers assigned
+        run: |
+          echo "Assigning reviewer: $CODE_OWNER to PR: $PR_NUMBER"
+          if [[ -n "$PR_NUMBER" && -n "$CODE_OWNER" ]]; then
+            gh pr edit "$PR_NUMBER" --add-reviewer "$CODE_OWNER"
+          else
+            echo "Missing required input: owner or pr_number"
+            exit 1
+          fi
+
+  approval:
+    needs: [build, assign]
+    runs-on: ${{ inputs.platform }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR_NUMBER: ${{ needs.build.outputs.PR_NUMBER }}
+      PR_AUTHOR: ${{ needs.build.outputs.PR_AUTHOR }}
+      REPO_NAME: ${{ needs.build.outputs.REPO_NAME }}
+      CODE_OWNER: ${{ needs.build.outputs.CODE_OWNER }}
+      HEAD_BRANCH: ${{ needs.build.outputs.HEAD_BRANCH}}
+    steps:
+      - name: Automatic
+        if: ${{ env.PR_AUTHOR == env.CODE_OWNER }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr_number = context.payload.pull_request.number;
+
+            if (!pr_number) {
+              throw new Error("Pull request number not found in the context.");
+            }
+
+            await github.rest.pulls.createReview({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr_number,
+              event: 'APPROVE'
+            });
+
+      - name: Not Automatic
+        if: github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request && contains(github.event.comment.body, 'approved')
+        run: |
+          commenter=$( echo "${{ github.event.comment.user.login }}" )
+
+          if [[ "$CODE_OWNER" != "*$commenter*" ]]; then
+            echo "commenter is not a reviewer; cannot approve"
+            gh pr lock "$PR_NUMBER" -r "spam"
+            exit 1
+          else
+            gh pr review "$PR_NUMBER" --approve
+          fi
