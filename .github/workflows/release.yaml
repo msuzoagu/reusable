@@ -210,35 +210,35 @@ jobs:
             echo "present=false" >> "$GITHUB_OUTPUT"
           fi
 
-  assign:
-    needs: build
-    runs-on: ${{ inputs.platform }}
-    if: ${{ github.event.pull_request.state == 'open' || github.event.action == 'reopened' }}    
-    env:
-      PR_NUMBER: ${{ needs.build.outputs.PR_NUMBER }}
-      PR_AUTHOR: ${{ needs.build.outputs.PR_AUTHOR }}
-      REPO_NAME: ${{ needs.build.outputs.REPO_NAME }}
-      CODE_OWNER: ${{ needs.build.outputs.CODE_OWNER }}
-      HEAD_BRANCH: ${{ needs.build.outputs.HEAD_BRANCH }}
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+  # assign:
+  #   needs: build
+  #   runs-on: ${{ inputs.platform }}
+  #   if: ${{ github.event.pull_request.state == 'open' || github.event.action == 'reopened' }}    
+  #   env:
+  #     PR_NUMBER: ${{ needs.build.outputs.PR_NUMBER }}
+  #     PR_AUTHOR: ${{ needs.build.outputs.PR_AUTHOR }}
+  #     REPO_NAME: ${{ needs.build.outputs.REPO_NAME }}
+  #     CODE_OWNER: ${{ needs.build.outputs.CODE_OWNER }}
+  #     HEAD_BRANCH: ${{ needs.build.outputs.HEAD_BRANCH }}
+  #     GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v4
+  #       with:
+  #         fetch-depth: 0
 
-      - name: Check for Reviewer
-        id: check_reviewer
-        run: |
-          echo "Checking if a reviewer is already assigned to PR: $PR_NUMBER"
+  #     - name: Check for Reviewer
+  #       id: check_reviewer
+  #       run: |
+  #         echo "Checking if a reviewer is already assigned to PR: $PR_NUMBER"
 
-          if [[ -n "${PR_NUMBER}" ]]; then
-            CURRENT_REVIEWERS=$(gh pr view "$PR_NUMBER" --json reviewRequests --jq '.reviewRequests | length')
-            echo "current_reviewers=$CURRENT_REVIEWERS" >> $GITHUB_ENV
-          else
-            echo "Missing required input: PR number"
-            exit 1
-          fi
+  #         if [[ -n "${PR_NUMBER}" ]]; then
+  #           CURRENT_REVIEWERS=$(gh pr view "$PR_NUMBER" --json reviewRequests --jq '.reviewRequests | length')
+  #           echo "current_reviewers=$CURRENT_REVIEWERS" >> $GITHUB_ENV
+  #         else
+  #           echo "Missing required input: PR number"
+  #           exit 1
+  #         fi
 
 
   # approval:
