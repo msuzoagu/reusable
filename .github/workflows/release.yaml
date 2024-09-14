@@ -43,7 +43,7 @@ on:
         value: ${{ jobs.build.outputs.LAST_RELEASE_PRESENT }}
 
 jobs:
-  build:
+  info:
     runs-on: ${{ inputs.platform }} # Use the platform input here
     if: ${{ github.event_name == 'pull_request' }}
     outputs:
